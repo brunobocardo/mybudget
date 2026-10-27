@@ -143,7 +143,7 @@ function accountBalance(a){
   D.entries.forEach(e=>{ if(e.date>today()) return;
     if(e.account_id===a.id) b += e.type==='income' ? +e.amount : -e.amount;      // transfers leave the "from" account…
     if(e.type==='transfer' && e.to_account_id===a.id) b += +e.amount; });         // …and arrive in the "to" account
-  D.contributions.forEach(c=>{ if(c.from_account_id===a.id) b -= +c.amount; });
+  D.contributions.forEach(c=>{ if(c.from_account_id===a.id && !c.entry_id && !byId('goals',c.goal_id).account_id) b -= +c.amount; }); // moves made before goals had an account
   return b;
 }
 function goalInfo(g){
@@ -321,6 +321,8 @@ function budgetsView(){
 }
 
 // ---------- goals ----------
+async function moveToGoal(ev,id){ ev.preventDefault(); const f=form('cf'+id);
+  await fetch('/api/goal-move',{method:'POST',body:JSON.stringify({...f,amount:+f.amount,goal_id:id,entered_by:byId('accounts',f.from_account_id).owner||me()})}); load(); }
 function goalsView(){
   const totT=sum(D.goals,g=>+g.target), totS=sum(D.goals,g=>goalInfo(g).saved), need=sum(D.goals,g=>goalInfo(g).monthly);
   return pageTop('Savings goals','Moving money to a goal is a transfer, not an expense.','')+
@@ -328,19 +330,21 @@ function goalsView(){
     <div class="card kpi"><div class="l">Needed each month</div><div class="v">${cur0(need)}</div><div class="s">to hit every due date</div></div>
     <div class="card kpi"><div class="l">On track</div><div class="v">${D.goals.filter(g=>goalInfo(g).onTrack).length}/${D.goals.length}</div><div class="s">goals</div></div>
     <div class="card kpi"><div class="l">Moved this month</div><div class="v">${cur0(sum(inM(D.contributions,today().slice(0,7))))}</div><div class="s">across all goals</div></div></div>
-  <div class="card" style="margin-top:16px"><h3>New goal</h3><form id="gf" class="form" onsubmit="event.preventDefault();save('goals',form('gf'))">
+  <div class="card" style="margin-top:16px"><h3>New goal</h3><form id="gf" class="form" onsubmit="event.preventDefault();save('goals',{...form('gf'),target:+form('gf').target})">
     <input name="name" placeholder="e.g. 🏖️ Vacation" required><input type="number" name="target" step="0.01" placeholder="Target amount" required>
-    <input type="date" name="due" required title="Due date"><button class="btn">Create goal</button></form></div>
+    <input type="date" name="due" required title="Due date"><select name="account_id" required title="Where the money is kept">${opts('accounts','','Keep the money in…',a=>a.kind!=='card'&&a.kind!=='loan')}</select><button class="btn">Create goal</button></form></div>
   <div class="grid g11" style="margin-top:16px">${D.goals.map(g=>{ const i=goalInfo(g), hist=D.contributions.filter(c=>c.goal_id===g.id).sort((a,b)=>b.date.localeCompare(a.date));
     return `<div class="card"><h3>${esc(g.name)} <button class="x" onclick="del('goals','${g.id}')" title="Delete goal">✕</button></h3>
     <div class="goal"><div class="ring" style="background:${ringBg(i.pct,i.onTrack?'#2ec484':'#e8a016')}"><div>${Math.round(i.pct)}%</div></div>
       <div><div style="font-size:22px;font-weight:800">${cur0(i.saved)} <span class="muted" style="font-size:14px;font-weight:500">of ${cur0(+g.target)}</span></div>
       <div class="muted">Due ${new Date(g.due+'T12:00').toLocaleDateString(undefined,{month:'long',year:'numeric'})} · ${i.months} months left</div>
-      <div style="margin-top:6px">Save <b>${cur(i.monthly)}/month</b> ${i.onTrack?'<span class="pill ok">On track</span>':'<span class="pill warn">Behind</span>'}</div></div></div>
-    <form id="cf${g.id}" class="form" style="margin-top:14px" onsubmit="event.preventDefault();save('contributions',{...form('cf${g.id}'),amount:+form('cf${g.id}').amount,goal_id:'${g.id}'})">
-      <input type="number" name="amount" step="0.01" value="${i.monthly.toFixed(2)}" required><select name="from_account_id">${opts('accounts','','Already saved')}</select>
+      <div style="margin-top:6px">Save <b>${cur(i.monthly)}/month</b> ${i.onTrack?'<span class="pill ok">On track</span>':'<span class="pill warn">Behind</span>'}</div>
+      <div class="muted" style="margin-top:6px;font-size:12.5px">Kept in <select style="padding:3px 6px" onchange="upd('goals','${g.id}','account_id',this.value)">${opts('accounts',g.account_id,'Choose account…',a=>a.kind!=='card'&&a.kind!=='loan')}</select></div></div></div>
+    ${g.account_id?'':'<div class="tip warn" style="margin-top:12px"><span class="e">🏦</span><span>Choose the account this goal’s money is kept in, so moves show up as transfers.</span></div>'}
+    <form id="cf${g.id}" class="form" style="margin-top:14px" onsubmit="moveToGoal(event,'${g.id}')">
+      <input type="number" name="amount" step="0.01" min="0.01" value="${i.monthly.toFixed(2)}" required><select name="from_account_id" title="Take the money from">${opts('accounts','','Already in '+(g.account_id?nm('accounts',g.account_id):'the goal'),a=>a.id!==g.account_id)}</select>
       <input type="date" name="date" value="${today()}" style="flex:0 1 150px"><button class="btn">Move money</button></form>
-    <table style="margin-top:8px">${hist.slice(0,5).map(c=>`<tr><td class="muted">${c.date}</td><td>${c.from_account_id?'From '+esc(nm('accounts',c.from_account_id)):'Already saved'}</td><td class="n"><b>${cur(+c.amount)}</b></td><td><button class="x" onclick="del('contributions','${c.id}')">✕</button></td></tr>`).join('')}</table></div>`; }).join('')}</div>
+    <table style="margin-top:8px">${hist.slice(0,5).map(c=>`<tr><td class="muted">${c.date}</td><td>${c.from_account_id?`${esc(nm('accounts',c.from_account_id))} → ${esc(nm('accounts',g.account_id))}`:'Already saved'}${c.entry_id?' <span class="pill n">transfer</span>':''}</td><td class="n"><b>${cur(+c.amount)}</b></td><td><button class="x" onclick="del('contributions','${c.id}')">✕</button></td></tr>`).join('')}</table></div>`; }).join('')}</div>
   ${D.goals.length?'':'<div class="card empty" style="margin-top:16px">Create your first goal above 🏁</div>'}`;
 }
 
@@ -364,7 +368,7 @@ function accountsView(){
   const bal=D.accounts.map(a=>({...a,bal:accountBalance(a)})), assets=sum(bal.filter(a=>a.bal>0),a=>a.bal), debt=-sum(bal.filter(a=>a.bal<0),a=>a.bal);
   const per={}; inM(D.entries,month).filter(e=>e.type!=='transfer').forEach(e=>{const k=e.entered_by||'Unassigned'; per[k]=per[k]||{inc:0,exp:0}; per[k][e.type==='income'?'inc':'exp']+= +e.amount;});
   const KIND={bank:'🏦 Bank',card:'💳 Credit card',savings:'🐷 Savings',cash:'💵 Cash',loan:'📉 Loan',invest:'📈 Investment'};
-  return pageTop('Accounts & net worth','Balance = starting balance + income − expenses ± transfers − moves to goals.',monthPicker())+
+  return pageTop('Accounts & net worth','Balance = starting balance + income − expenses ± transfers (including moves to goals).',monthPicker())+
   `<div class="grid g4"><div class="card kpi hero"><div class="l">Net worth</div><div class="v">${cur0(assets-debt)}</div><div class="s">across ${D.accounts.length} accounts</div></div>
    <div class="card kpi"><div class="l">Assets</div><div class="v pos">${cur0(assets)}</div></div><div class="card kpi"><div class="l">Debt / cards</div><div class="v neg">${cur0(debt)}</div></div>
    <div class="card kpi"><div class="l">In goals</div><div class="v">${cur0(sum(D.goals,g=>goalInfo(g).saved))}</div></div></div>

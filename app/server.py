@@ -45,8 +45,8 @@ TABLES = {
     "accounts": ["name", "kind", "balance", "owner"],
     "categories": ["name", "budget", "kind", "icon"],
     "entries": ["date", "type", "amount", "category_id", "account_id", "note", "entered_by", "to_account_id"],  # type: income | expense | transfer
-    "goals": ["name", "target", "due"],
-    "contributions": ["goal_id", "date", "amount", "from_account_id", "note"],
+    "goals": ["name", "target", "due", "account_id"],  # account_id: where the goal's money is kept
+    "contributions": ["goal_id", "date", "amount", "from_account_id", "note", "entry_id"],  # entry_id: linked transfer
     "people": ["name", "color"],
 }
 
@@ -93,6 +93,20 @@ def upsert(c, t, row):
     cols = ["id"] + TABLES[t]
     c.execute(f"INSERT OR REPLACE INTO {t} ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", [row.get(k) for k in cols])
     return row
+
+def goal_move(req):
+    """Move money into a goal: a transfer from the source account to the goal's account, plus goal progress.
+    No transfer when there's no source ("already saved") or the money is already in the goal's account."""
+    with conn() as c:
+        goal = c.execute("SELECT * FROM goals WHERE id=?", (req["goal_id"],)).fetchone()
+        src, dest = req.get("from_account_id") or None, goal["account_id"] if goal else None
+        entry_id = None
+        if src and dest and src != dest:
+            entry_id = upsert(c, "entries", {"date": req["date"], "type": "transfer", "amount": req["amount"], "account_id": src,
+                                             "to_account_id": dest, "note": f"🏁 {goal['name']}" + (f" · {req['note']}" if req.get("note") else ""),
+                                             "entered_by": req.get("entered_by")})["id"]
+        return upsert(c, "contributions", {"goal_id": req["goal_id"], "date": req["date"], "amount": req["amount"],
+                                           "from_account_id": src, "note": req.get("note"), "entry_id": entry_id})
 
 # ---------- AI ----------
 def ask_claude(summary, lang):
@@ -246,6 +260,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/insights":
             req = self.body()
             return self.send(*ask_claude(req.get("summary", {}), req.get("lang", "English")))
+        if p == "/api/goal-move":  # goal progress + the matching account transfer, saved together
+            return self.send(200, goal_move(self.body()))
         if p == "/api/bulk/entries":  # statement import: many rows in one transaction
             rows = self.body().get("rows", [])
             with conn() as c:
@@ -266,9 +282,13 @@ class Handler(BaseHTTPRequestHandler):
         if not t or not rid:
             return self.send(404, {"error": "not found"})
         with conn() as c:
+            if t == "contributions":
+                c.execute("DELETE FROM entries WHERE id IN (SELECT entry_id FROM contributions WHERE id=?)", (rid,))
             c.execute(f"DELETE FROM {t} WHERE id=?", (rid,))
-            if t == "goals":
+            if t == "goals":  # history stays in the accounts; only the goal tracking goes
                 c.execute("DELETE FROM contributions WHERE goal_id=?", (rid,))
+            if t == "entries":
+                c.execute("DELETE FROM contributions WHERE entry_id=?", (rid,))
             if t == "accounts":  # keep the history, just unlink it; transfers touching the account go too
                 c.execute("DELETE FROM entries WHERE type='transfer' AND (account_id=? OR to_account_id=?)", (rid, rid))
                 c.execute("UPDATE entries SET account_id=NULL WHERE account_id=?", (rid,))
