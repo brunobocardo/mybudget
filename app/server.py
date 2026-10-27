@@ -44,9 +44,10 @@ DATA:
 TABLES = {
     "accounts": ["name", "kind", "balance", "owner"],
     "categories": ["name", "budget", "kind", "icon"],
-    "entries": ["date", "type", "amount", "category_id", "account_id", "note", "entered_by"],
+    "entries": ["date", "type", "amount", "category_id", "account_id", "note", "entered_by", "to_account_id"],  # type: income | expense | transfer
     "goals": ["name", "target", "due"],
     "contributions": ["goal_id", "date", "amount", "from_account_id", "note"],
+    "people": ["name", "color"],
 }
 
 def conn():
@@ -72,6 +73,11 @@ def init():
             c.execute("UPDATE categories SET kind=COALESCE(kind,?), icon=COALESCE(icon,?) WHERE name=?", (k, i, n))
         c.execute("UPDATE categories SET kind='flexible' WHERE kind IS NULL")
         c.execute("UPDATE accounts SET balance=0 WHERE balance IS NULL")
+        # Everyone already named on entries or accounts becomes a household member.
+        known = {r[0] for r in c.execute("SELECT name FROM people")}
+        for (n,) in c.execute("SELECT entered_by FROM entries UNION SELECT owner FROM accounts").fetchall():
+            if n and n not in known:
+                c.execute("INSERT INTO people (id, name) VALUES (?,?)", (uuid.uuid4().hex, n)); known.add(n)
         if not c.execute("SELECT 1 FROM accounts").fetchone():
             for n, k in [("Checking", "bank"), ("Savings", "savings"), ("Credit Card A", "card"), ("Credit Card B", "card")]:
                 c.execute("INSERT INTO accounts (id, name, kind, balance) VALUES (?,?,?,0)", (uuid.uuid4().hex, n, k))
@@ -263,6 +269,10 @@ class Handler(BaseHTTPRequestHandler):
             c.execute(f"DELETE FROM {t} WHERE id=?", (rid,))
             if t == "goals":
                 c.execute("DELETE FROM contributions WHERE goal_id=?", (rid,))
+            if t == "accounts":  # keep the history, just unlink it; transfers touching the account go too
+                c.execute("DELETE FROM entries WHERE type='transfer' AND (account_id=? OR to_account_id=?)", (rid, rid))
+                c.execute("UPDATE entries SET account_id=NULL WHERE account_id=?", (rid,))
+                c.execute("UPDATE contributions SET from_account_id=NULL WHERE from_account_id=?", (rid,))
         self.send(200, {"ok": True})
 
     def log_message(self, *a):

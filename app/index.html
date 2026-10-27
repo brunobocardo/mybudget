@@ -76,6 +76,7 @@ input:focus, select:focus { outline:2px solid var(--brand2); outline-offset:-1px
 .cal .d { min-height:64px; border-radius:9px; background:var(--panel2); padding:5px 6px; font-size:11.5px; border:1px solid transparent; overflow:hidden; }
 .cal .d.today { border-color:var(--brand2); } .cal .d.o { opacity:.35; }
 .cal .d .b { display:block; margin-top:2px; padding:1px 5px; border-radius:5px; background:rgba(217,72,63,.12); color:var(--red); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cal .d .b.tr { background:rgba(59,130,246,.13); color:var(--blue); }
 .cal .d .b.in { background:rgba(18,128,106,.13); color:var(--brand); }
 .chart { position:relative; height:260px; } .chart.sm { height:220px; }
 .muted { color:var(--muted); } .empty { color:var(--muted); padding:20px; text-align:center; }
@@ -98,7 +99,7 @@ input:focus, select:focus { outline:2px solid var(--brand2); outline-offset:-1px
 </div>
 <script>
 // ---------- data ----------
-let D = {accounts:[],categories:[],entries:[],goals:[],contributions:[]};
+let D = {accounts:[],categories:[],entries:[],goals:[],contributions:[],people:[]};
 let view = localStorage.getItem('view') || 'dash';
 let month = new Date().toISOString().slice(0,7);
 let F = {q:'', type:'', cat:'', acc:'', who:''};
@@ -119,7 +120,7 @@ const exps = m => inM(D.entries,m).filter(e=>e.type==='expense');
 const incs = m => inM(D.entries,m).filter(e=>e.type==='income');
 let ME = {auth:false};
 const me = () => ME.name || (()=>{try{return localStorage.getItem('me')||''}catch{return ''}})();
-const people = () => [...new Set([...(D.users||[]).map(u=>u.name), ...D.entries.map(e=>e.entered_by), ...D.accounts.map(a=>a.owner), me()].filter(Boolean))].sort();
+const people = () => [...new Set([...(D.people||[]).map(p=>p.name), ...(D.users||[]).map(u=>u.name), me()].filter(Boolean))].sort();
 const personOpts = (sel,blank) => (blank!==undefined?`<option value="">${blank}</option>`:'')+people().map(p=>`<option ${p===sel?'selected':''}>${esc(p)}</option>`).join('');
 const COLORS = ['#2ec484','#3b82f6','#e8a016','#8b5cf6','#ef6f6c','#14b8a6','#f472b6','#84cc16','#0ea5e9','#f97316','#64748b'];
 const avColor = s => COLORS[[...String(s)].reduce((a,c)=>a+c.charCodeAt(0),0)%COLORS.length];
@@ -139,7 +140,9 @@ const expenseCats = () => D.categories.filter(c=>c.kind!=='income');
 // ---------- derived ----------
 function accountBalance(a){
   let b = +a.balance||0;
-  D.entries.forEach(e=>{ if(e.account_id===a.id && e.date<=today()) b += e.type==='income' ? +e.amount : -e.amount; });
+  D.entries.forEach(e=>{ if(e.date>today()) return;
+    if(e.account_id===a.id) b += e.type==='income' ? +e.amount : -e.amount;      // transfers leave the "from" account…
+    if(e.type==='transfer' && e.to_account_id===a.id) b += +e.amount; });         // …and arrive in the "to" account
   D.contributions.forEach(c=>{ if(c.from_account_id===a.id) b -= +c.amount; });
   return b;
 }
@@ -250,34 +253,40 @@ const goalMini = g => { const i=goalInfo(g); return `<div class="goal" style="gr
 
 // ---------- transactions ----------
 function txView(){
-  const people=[...new Set(D.entries.map(e=>e.entered_by).filter(Boolean))];
-  let es=inM(D.entries,month).filter(e=>(!F.type||e.type===F.type)&&(!F.cat||e.category_id===F.cat)&&(!F.acc||e.account_id===F.acc)&&(!F.who||e.entered_by===F.who)
-    &&(!F.q||(e.note+' '+nm('categories',e.category_id)+' '+nm('accounts',e.account_id)).toLowerCase().includes(F.q.toLowerCase()))).sort((a,b)=>b.date.localeCompare(a.date));
-  return pageTop('Transactions','Every income and expense, with who entered it.',monthPicker()+`<button class="btn ghost" onclick="exportCSV()">⬇ Export CSV</button><label class="btn ghost">⬆ Import CSV<input type="file" accept=".csv" hidden onchange="importCSV(this.files[0])"></label>`)+
+  let es=inM(D.entries,month).filter(e=>(!F.type||e.type===F.type)&&(!F.cat||e.category_id===F.cat)&&(!F.acc||e.account_id===F.acc||e.to_account_id===F.acc)&&(!F.who||e.entered_by===F.who)
+    &&(!F.q||(e.note+' '+nm('categories',e.category_id)+' '+nm('accounts',e.account_id)+' '+nm('accounts',e.to_account_id)).toLowerCase().includes(F.q.toLowerCase()))).sort((a,b)=>b.date.localeCompare(a.date));
+  return pageTop('Transactions','Every income, expense and transfer, and who it belongs to.',monthPicker()+`<button class="btn ghost" onclick="exportCSV()">⬇ Export CSV</button><label class="btn ghost">⬆ Import CSV<input type="file" accept=".csv" hidden onchange="importCSV(this.files[0])"></label>`)+
   `<div class="card"><h3>Add transaction</h3><form id="ef" class="form" onsubmit="addEntry(event)">
-    <select name="type" style="flex:0 1 110px"><option value="expense">Expense</option><option value="income">Income</option></select>
+    <select name="type" style="flex:0 1 120px" onchange="txType(this.value)"><option value="expense">Expense</option><option value="income">Income</option><option value="transfer">Transfer</option></select>
     <input type="date" name="date" value="${today()}" required>
-    <input type="number" name="amount" step="0.01" min="0" placeholder="Amount" required>
-    <select name="category_id" required>${opts('categories','','Category')}</select>
-    <select name="account_id">${opts('accounts','','Account / card')}</select>
+    <input type="number" name="amount" step="0.01" min="0.01" placeholder="Amount" required>
+    <select name="category_id" id="ef-cat" required>${opts('categories','','Category')}</select>
+    <select name="account_id" id="ef-from">${opts('accounts','','Account / card')}</select>
+    <select name="to_account_id" id="ef-to" style="display:none">${opts('accounts','','To account')}</select>
+    <select name="entered_by" title="Who it belongs to">${personOpts(me(),'Household')}</select>
     <input name="note" placeholder="Note (e.g. Costco)">
     <select name="repeat" style="flex:0 1 130px" title="Repeat monthly"><option value="1">One time</option>${[3,6,12,24,36].map(n=>`<option value="${n}">Monthly ×${n}</option>`).join('')}</select>
     <button class="btn">Add</button></form></div>
   <div class="card" style="margin-top:16px"><div class="form" style="margin-bottom:12px">
     <input placeholder="🔍 Search notes, categories, cards" value="${esc(F.q)}" oninput="F.q=this.value;clearTimeout(window._t);window._t=setTimeout(()=>{render();const i=$('#app input[placeholder^=\\'🔍\\']');i.focus();i.setSelectionRange(i.value.length,i.value.length)},250)" style="flex:2 1 220px">
-    <select onchange="F.type=this.value;render()"><option value="">All types</option><option value="expense" ${F.type==='expense'?'selected':''}>Expenses</option><option value="income" ${F.type==='income'?'selected':''}>Income</option></select>
+    <select onchange="F.type=this.value;render()"><option value="">All types</option><option value="expense" ${F.type==='expense'?'selected':''}>Expenses</option><option value="income" ${F.type==='income'?'selected':''}>Income</option><option value="transfer" ${F.type==='transfer'?'selected':''}>Transfers</option></select>
     <select onchange="F.cat=this.value;render()">${opts('categories',F.cat,'All categories')}</select>
     <select onchange="F.acc=this.value;render()">${opts('accounts',F.acc,'All accounts')}</select>
-    <select onchange="F.who=this.value;render()"><option value="">Everyone</option>${people.map(p=>`<option ${p===F.who?'selected':''}>${esc(p)}</option>`).join('')}</select></div>
-    <div style="display:flex;gap:16px;margin-bottom:8px" class="muted">${es.length} items · In <b class="pos">${cur(sum(es.filter(e=>e.type==='income')))}</b> · Out <b class="neg">${cur(sum(es.filter(e=>e.type==='expense')))}</b></div>
-    <table><tr><th>Date</th><th>Category</th><th class="hide-m">Account</th><th class="hide-m">Note</th><th class="hide-m">By</th><th class="n">Amount</th><th></th></tr>
-    ${es.map(e=>`<tr><td>${new Date(e.date+'T12:00').toLocaleDateString(undefined,{day:'numeric',month:'short'})}</td><td>${icon(e.category_id)} ${esc(nm('categories',e.category_id))}</td><td class="hide-m">${esc(nm('accounts',e.account_id))}</td><td class="hide-m muted">${esc(e.note)}</td>
-      <td class="hide-m">${e.entered_by?`<span class="av" style="background:${avColor(e.entered_by)}">${esc(e.entered_by[0].toUpperCase())}</span>`:''}</td>
-      <td class="n ${e.type==='income'?'pos':''}"><b>${e.type==='income'?'+':'−'}${cur(+e.amount)}</b></td><td><button class="x" onclick="del('entries','${e.id}')" title="Delete">✕</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No transactions match</td></tr>'}</table></div>`;
+    <select onchange="F.who=this.value;render()">${personOpts(F.who,'Everyone')}</select></div>
+    <div style="display:flex;gap:16px;margin-bottom:8px" class="muted">${es.length} items · In <b class="pos">${cur(sum(es.filter(e=>e.type==='income')))}</b> · Out <b class="neg">${cur(sum(es.filter(e=>e.type==='expense')))}</b> · Moved <b>${cur(sum(es.filter(e=>e.type==='transfer')))}</b></div>
+    <table><tr><th>Date</th><th>Category</th><th class="hide-m">Account</th><th class="hide-m">Note</th><th class="hide-m">Person</th><th class="n">Amount</th><th></th></tr>
+    ${es.map(e=>{ const tr=e.type==='transfer'; return `<tr><td>${new Date(e.date+'T12:00').toLocaleDateString(undefined,{day:'numeric',month:'short'})}</td>
+      <td>${tr?'🔁 Transfer':icon(e.category_id)+' '+esc(nm('categories',e.category_id))}</td><td class="hide-m">${tr?`${esc(nm('accounts',e.account_id))} → ${esc(nm('accounts',e.to_account_id))}`:esc(nm('accounts',e.account_id))}</td><td class="hide-m muted">${esc(e.note)}</td>
+      <td class="hide-m"><select onchange="upd('entries','${e.id}','entered_by',this.value)" style="padding:4px 6px">${personOpts(e.entered_by,'Household')}${e.entered_by&&!people().includes(e.entered_by)?`<option selected>${esc(e.entered_by)}</option>`:''}</select></td>
+      <td class="n ${e.type==='income'?'pos':''}"><b>${tr?'⇄ ':e.type==='income'?'+':'−'}${cur(+e.amount)}</b></td><td><button class="x" onclick="del('entries','${e.id}')" title="Delete">✕</button></td></tr>`}).join('')||'<tr><td colspan="7" class="empty">No transactions match</td></tr>'}</table></div>`;
 }
+function txType(t){ const tr=t==='transfer', c=$('#ef-cat');
+  c.style.display=tr?'none':''; c.required=!tr; $('#ef-to').style.display=tr?'':'none'; $('#ef-to').required=tr; $('#ef-from').required=tr;
+  $('#ef-from').options[0].text=tr?'From account':'Account / card'; }
 async function addEntry(ev){
   ev.preventDefault(); const f=form('ef'), n=+f.repeat||1; delete f.repeat;
-  for(let i=0;i<n;i++){ const d=new Date(f.date+'T12:00'); d.setMonth(d.getMonth()+i); await post('entries',{...f,amount:+f.amount,date:d.toISOString().slice(0,10),entered_by:me()}); }
+  if(f.type==='transfer'){ if(f.account_id===f.to_account_id) return alert('Choose two different accounts.'); f.category_id=''; } else f.to_account_id='';
+  for(let i=0;i<n;i++){ const d=new Date(f.date+'T12:00'); d.setMonth(d.getMonth()+i); await post('entries',{...f,amount:+f.amount,date:d.toISOString().slice(0,10)}); }
   load();
 }
 function exportCSV(){
@@ -342,7 +351,7 @@ function billsView(){
   const rec=recurring().filter(r=>r.type==='expense'), recTot=sum(rec,r=>r.avg);
   let cells=[...'SMTWTFS'].map(d=>`<div class="h">${d}</div>`).join('')+'<div class="d o"></div>'.repeat(pad);
   for(let d=1; d<=dim; d++){ const ds=`${month}-${String(d).padStart(2,'0')}`, items=ev.filter(e=>e.date===ds);
-    cells+=`<div class="d ${ds===today()?'today':''} ${items.length?'has':''}"><b>${d}</b>${items.slice(0,3).map(e=>`<span class="b ${e.type==='income'?'in':''}" title="${esc(nm('categories',e.category_id))} ${cur(+e.amount)}">${icon(e.category_id)} ${cur0(+e.amount)}</span>`).join('')}${items.length>3?`<span class="muted">+${items.length-3}</span>`:''}</div>`; }
+    cells+=`<div class="d ${ds===today()?'today':''} ${items.length?'has':''}"><b>${d}</b>${items.slice(0,3).map(e=>`<span class="b ${e.type==='income'?'in':e.type==='transfer'?'tr':''}" title="${esc(nm('categories',e.category_id))} ${cur(+e.amount)}">${icon(e.category_id)} ${cur0(+e.amount)}</span>`).join('')}${items.length>3?`<span class="muted">+${items.length-3}</span>`:''}</div>`; }
   return pageTop('Bills & recurring','Calendar of money in and out. Repeating charges are detected automatically.',monthPicker())+
   `<div class="grid g2"><div class="card"><h3>Calendar</h3><div class="cal">${cells}</div></div>
    <div class="card"><h3>Recurring charges <small>${cur0(recTot)}/mo · ${cur0(recTot*12)}/yr</small></h3>
@@ -353,22 +362,34 @@ function billsView(){
 // ---------- accounts ----------
 function accountsView(){
   const bal=D.accounts.map(a=>({...a,bal:accountBalance(a)})), assets=sum(bal.filter(a=>a.bal>0),a=>a.bal), debt=-sum(bal.filter(a=>a.bal<0),a=>a.bal);
-  const per={}; inM(D.entries,month).forEach(e=>{const k=e.entered_by||'Unassigned'; per[k]=per[k]||{inc:0,exp:0}; per[k][e.type==='income'?'inc':'exp']+= +e.amount;});
+  const per={}; inM(D.entries,month).filter(e=>e.type!=='transfer').forEach(e=>{const k=e.entered_by||'Unassigned'; per[k]=per[k]||{inc:0,exp:0}; per[k][e.type==='income'?'inc':'exp']+= +e.amount;});
   const KIND={bank:'🏦 Bank',card:'💳 Credit card',savings:'🐷 Savings',cash:'💵 Cash',loan:'📉 Loan',invest:'📈 Investment'};
-  return pageTop('Accounts & net worth','Balances = starting balance + income − expenses − moves to goals.',monthPicker())+
+  return pageTop('Accounts & net worth','Balance = starting balance + income − expenses ± transfers − moves to goals.',monthPicker())+
   `<div class="grid g4"><div class="card kpi hero"><div class="l">Net worth</div><div class="v">${cur0(assets-debt)}</div><div class="s">across ${D.accounts.length} accounts</div></div>
    <div class="card kpi"><div class="l">Assets</div><div class="v pos">${cur0(assets)}</div></div><div class="card kpi"><div class="l">Debt / cards</div><div class="v neg">${cur0(debt)}</div></div>
    <div class="card kpi"><div class="l">In goals</div><div class="v">${cur0(sum(D.goals,g=>goalInfo(g).saved))}</div></div></div>
-  <div class="grid g2" style="margin-top:16px"><div class="card"><h3>Accounts</h3><table><tr><th>Account</th><th>Type</th><th>Owner</th><th class="n">Starting balance</th><th class="n">Balance now</th><th></th></tr>
+  <div class="card" style="margin-top:16px"><h3>Accounts</h3><div style="overflow-x:auto"><table><tr><th>Account</th><th>Type</th><th>Owner</th><th class="n">Starting balance</th><th class="n">Balance now</th><th></th></tr>
     ${bal.map(a=>`<tr><td><input value="${esc(a.name)}" onchange="upd('accounts','${a.id}','name',this.value)"></td><td><select onchange="upd('accounts','${a.id}','kind',this.value)">${Object.entries(KIND).map(([k,v])=>`<option value="${k}" ${k===a.kind?'selected':''}>${v}</option>`).join('')}</select></td>
       <td><select onchange="upd('accounts','${a.id}','owner',this.value)">${personOpts(a.owner,'Shared')}</select></td>
       <td class="n"><input type="number" step="0.01" style="width:120px;text-align:right" value="${+a.balance||0}" onchange="upd('accounts','${a.id}','balance',+this.value)"></td>
-      <td class="n ${a.bal<0?'neg':''}"><b>${cur(a.bal)}</b></td><td><button class="x" onclick="del('accounts','${a.id}')">✕</button></td></tr>`).join('')}</table>
+      <td class="n ${a.bal<0?'neg':''}"><b>${cur(a.bal)}</b></td><td><button class="x" onclick="delAccount('${a.id}')" title="Delete account">✕</button></td></tr>`).join('')}</table></div>
     <form id="af" class="form" style="margin-top:12px" onsubmit="event.preventDefault();save('accounts',{...form('af'),balance:+form('af').balance||0})"><input name="name" placeholder="New account or card" required>
-      <select name="kind">${Object.entries(KIND).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input type="number" step="0.01" name="balance" placeholder="Starting balance"><button class="btn">Add</button></form></div>
+      <select name="kind">${Object.entries(KIND).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><select name="owner">${personOpts('','Shared')}</select><input type="number" step="0.01" name="balance" placeholder="Starting balance"><button class="btn">Add account</button></form></div>
+  <div class="grid g2" style="margin-top:16px"><div class="card"><h3>🔁 Transfer between accounts</h3>
+    <form id="tf" class="form" onsubmit="addTransfer(event)"><select name="account_id" required>${opts('accounts','','From…')}</select><span style="flex:0 0 auto">→</span><select name="to_account_id" required>${opts('accounts','','To…')}</select>
+      <input type="number" name="amount" step="0.01" min="0.01" placeholder="Amount" required><input type="date" name="date" value="${today()}" required><input name="note" placeholder="Note (optional)"><button class="btn">Transfer</button></form>
+    <p class="muted" style="margin-bottom:0">Takes the money out of one account and puts it into the other. It isn't income or spending, so budgets and totals stay the same.</p>
+    <table style="margin-top:8px">${D.entries.filter(e=>e.type==='transfer').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6).map(e=>`<tr><td class="muted">${e.date}</td><td>${esc(nm('accounts',e.account_id))} → ${esc(nm('accounts',e.to_account_id))}</td><td class="n"><b>${cur(+e.amount)}</b></td><td><button class="x" onclick="del('entries','${e.id}')">✕</button></td></tr>`).join('')}</table></div>
    <div class="card"><h3>Spending by card <small>${mlabel(month,{month:'long'})}</small></h3><div class="chart sm"><canvas id="acc"></canvas></div>
     <h3 style="margin-top:16px">Per person <small>income · expenses</small></h3>${Object.entries(per).sort((a,b)=>b[1].exp-a[1].exp).map(([p,v])=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><span class="av" style="background:${avColor(p)}">${esc(p[0])}</span><span style="flex:1">${esc(p)}</span><b class="pos">+${cur0(v.inc)}</b><b class="neg">−${cur0(v.exp)}</b></div>`).join('')||'<div class="empty">No entries</div>'}</div></div>`;
 }
+async function addTransfer(ev){ ev.preventDefault(); const f=form('tf');
+  if(f.account_id===f.to_account_id) return alert('Choose two different accounts.');
+  await save('entries',{...f,type:'transfer',amount:+f.amount,entered_by:byId('accounts',f.account_id).owner||me()}); }
+async function delAccount(id){
+  const n=D.entries.filter(e=>e.account_id===id||e.to_account_id===id).length, a=byId('accounts',id);
+  if(!confirm(`Delete “${a.name}”?`+(n?`\n\n${n} transaction(s) use it. Income and expenses are kept (without an account); transfers to or from it are removed.`:''))) return;
+  await fetch('/api/accounts/'+id,{method:'DELETE'}); await load(); }
 afterRender.accounts = () => { const d=D.accounts.map(a=>({n:a.name,v:sum(exps(month).filter(e=>e.account_id===a.id))})).filter(x=>x.v);
   chart('acc',{type:'bar',data:{labels:d.map(x=>x.n),datasets:[{data:d.map(x=>x.v),backgroundColor:COLORS,borderRadius:6}]},options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{callback:v=>cur0(v)}},y:{grid:{display:false}}}}}); };
 
@@ -435,13 +456,23 @@ function settingsView(){
     <h3 style="margin-top:20px">Theme</h3><div class="seg">${['auto','light','dark'].map(t=>`<button class="${(localStorage.getItem('theme')||'auto')===t?'on':''}" onclick="setTheme('${t}')">${t[0].toUpperCase()+t.slice(1)}</button>`).join('')}</div>
     <h3 style="margin-top:20px">Your data</h3><p class="muted">Everything is saved in <b>mybudget.db</b> in the MyBudget folder on your Desktop. Copy that file to back it up.</p>
     <button class="btn ghost" onclick="exportCSV()">⬇ Export transactions (CSV)</button></div>
-   <div class="card"><h3>Categories</h3><table>${D.categories.map(c=>`<tr><td style="width:56px"><input value="${esc(c.icon||'')}" style="width:46px;text-align:center" onchange="upd('categories','${c.id}','icon',this.value)"></td>
+   <div class="card"><h3>👨‍👩‍👧 Household <small>people you can assign accounts, income and expenses to</small></h3>
+    ${(D.people||[]).map(p=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0"><span class="av" style="background:${avColor(p.name)}">${esc(p.name[0])}</span>
+      <input value="${esc(p.name)}" style="flex:1" onchange="renamePerson('${p.id}',this.value)"><span class="muted" style="font-size:12px">${D.entries.filter(e=>e.entered_by===p.name).length} entries · ${D.accounts.filter(a=>a.owner===p.name).length} accounts</span>
+      <button class="x" onclick="del('people','${p.id}')" title="Remove">✕</button></div>`).join('')||'<div class="empty">No one yet</div>'}
+    <form id="pf" class="form" style="margin-top:10px" onsubmit="event.preventDefault();save('people',form('pf'))"><input name="name" placeholder="Name (e.g. Ana)" required><button class="btn">Add person</button></form>
+    <h3 style="margin-top:20px">Categories</h3><table>${D.categories.map(c=>`<tr><td style="width:56px"><input value="${esc(c.icon||'')}" style="width:46px;text-align:center" onchange="upd('categories','${c.id}','icon',this.value)"></td>
      <td><input value="${esc(c.name)}" onchange="upd('categories','${c.id}','name',this.value)" style="width:100%"></td>
      <td><select onchange="upd('categories','${c.id}','kind',this.value)">${['flexible','fixed','income'].map(k=>`<option ${c.kind===k?'selected':''}>${k}</option>`).join('')}</select></td><td><button class="x" onclick="del('categories','${c.id}')">✕</button></td></tr>`).join('')}</table>
     <form id="kf" class="form" style="margin-top:12px" onsubmit="event.preventDefault();save('categories',{...form('kf'),budget:+form('kf').budget||0})">
       <input name="icon" placeholder="🙂" style="flex:0 0 56px;text-align:center"><input name="name" placeholder="New category" required>
       <select name="kind"><option>flexible</option><option>fixed</option><option>income</option></select><input type="number" name="budget" placeholder="Budget"><button class="btn">Add</button></form></div></div>`;
 }
+async function renamePerson(id,name){ const old=byId('people',id).name; if(!name||name===old) return;
+  await post('people',{...byId('people',id),name});
+  for(const e of D.entries.filter(e=>e.entered_by===old)) await post('entries',{...e,entered_by:name});
+  for(const a of D.accounts.filter(a=>a.owner===old)) await post('accounts',{...a,owner:name});
+  load(); }
 function setTheme(t){ try{localStorage.setItem('theme',t)}catch{} if(t==='auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme=t; render(); }
 try{ const t=localStorage.getItem('theme'); if(t&&t!=='auto') document.documentElement.dataset.theme=t; }catch{}
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',render);
@@ -525,11 +556,11 @@ function buildRows(){
     const desc=(r[M.desc]||'').trim(), date=parseDate(r[M.date],IMP.datefmt), type=amt>=0?'income':'expense', amount=Math.abs(amt);
     const dup=D.entries.some(e=>e.date===date&&Math.abs(e.amount-amount)<.005&&e.type===type&&(!IMP.account||e.account_id===IMP.account));
     const transfer=TRANSFER.test(desc);
-    return {i,date,desc,type,amount,category_id:guessCategory(desc,type),include:!!date&&amount>0&&!dup&&!transfer,dup,transfer};
+    return {i,date,desc,type,amount,sign:amt>=0?1:-1,category_id:guessCategory(desc,type),include:!!date&&amount>0&&!dup&&!transfer,dup,transfer};
   }).filter(r=>r.date||r.amount);
 }
 const impSet = (k,v) => { IMP[k]=v; if(['account','sign','datefmt'].includes(k)||k.startsWith('map.')) buildRows(); if(k==='account'&&byId('accounts',v).owner) IMP.person=byId('accounts',v).owner; render(); };
-const rowSet = (i,k,v) => { const r=IMP.rows.find(r=>r.i===i); r[k]=v; if(k==='type') r.category_id=guessCategory(r.desc,v); render(); };
+const rowSet = (i,k,v) => { const r=IMP.rows.find(r=>r.i===i); r[k]=v; if(k==='type'){ r.category_id=v==='transfer'?'':guessCategory(r.desc,v); if(v==='transfer') r.include=true; } render(); };
 function importView(){
   const R=IMP.rows, inc=R.filter(r=>r.include&&r.type==='income'), exp=R.filter(r=>r.include&&r.type==='expense'), unc=R.filter(r=>r.include&&!r.category_id).length;
   const col=(k,label)=>`<label class="muted" style="font-size:12px">${label}<br><select onchange="IMP.map.${k}=+this.value;buildRows();render()"><option value="-1">—</option>${IMP.head.map((h,i)=>`<option value="${i}" ${IMP.map[k]===i?'selected':''}>${esc(h)}</option>`).join('')}</select></label>`;
@@ -550,8 +581,8 @@ function importView(){
   <div class="card" style="margin-top:16px"><h3>3 · Review <small>${unc?`<span class="pill warn">${unc} need a category</span>`:'<span class="pill ok">All categorized</span>'}</small></h3>
     <table><tr><th><input type="checkbox" ${R.every(r=>r.include)?'checked':''} onchange="IMP.rows.forEach(r=>r.include=this.checked);render()"></th><th>Date</th><th>Description</th><th>Type</th><th>Category</th><th class="n">Amount</th><th></th></tr>
     ${R.map(r=>`<tr style="${r.include?'':'opacity:.5'}"><td><input type="checkbox" ${r.include?'checked':''} onchange="rowSet(${r.i},'include',this.checked)"></td><td>${r.date||'<span class="neg">?</span>'}</td><td>${esc(r.desc)}</td>
-      <td><select onchange="rowSet(${r.i},'type',this.value)"><option value="expense">Expense</option><option value="income" ${r.type==='income'?'selected':''}>Income</option></select></td>
-      <td><select onchange="rowSet(${r.i},'category_id',this.value)" style="${r.category_id?'':'border-color:var(--amber)'}">${opts('categories',r.category_id,'Choose…',c=>r.type==='income'?c.kind==='income':c.kind!=='income')}</select></td>
+      <td><select onchange="rowSet(${r.i},'type',this.value)"><option value="expense">Expense</option><option value="income" ${r.type==='income'?'selected':''}>Income</option><option value="transfer" ${r.type==='transfer'?'selected':''}>Transfer</option></select></td>
+      <td>${r.type==='transfer'?`<select onchange="rowSet(${r.i},'other',this.value)" style="${r.other?'':'border-color:var(--amber)'}">${opts('accounts',r.other,r.sign>0?'From account…':'To account…',a=>a.id!==IMP.account)}</select>`:`<select onchange="rowSet(${r.i},'category_id',this.value)" style="${r.category_id?'':'border-color:var(--amber)'}">${opts('categories',r.category_id,'Choose…',c=>r.type==='income'?c.kind==='income':c.kind!=='income')}</select>`}</td>
       <td class="n ${r.type==='income'?'pos':''}"><b>${r.type==='income'?'+':'−'}${cur(r.amount)}</b></td><td>${r.dup?'<span class="pill n">duplicate</span>':r.transfer?'<span class="pill n">transfer</span>':''}</td></tr>`).join('')}</table>
     <div class="form" style="margin-top:14px;justify-content:flex-end"><span class="muted" style="flex:1">Imported as ${esc(IMP.person||'household')} on ${esc(nm('accounts',IMP.account))}. Next time, similar descriptions get the same category.</span>
       <button class="btn" onclick="doImport()" ${IMP.account&&R.some(r=>r.include)?'':'disabled'}>Import ${R.filter(r=>r.include).length} transactions</button></div></div>`
@@ -559,7 +590,9 @@ function importView(){
 }
 async function doImport(){
   if(IMP.person==='__new'){ const n=prompt('Name of the person'); if(!n) return; IMP.person=n; }
-  const rows=IMP.rows.filter(r=>r.include&&r.date).map(r=>({date:r.date,type:r.type,amount:+r.amount.toFixed(2),category_id:r.category_id,account_id:IMP.account,note:r.desc,entered_by:IMP.person||''}));
+  const bad=IMP.rows.filter(r=>r.include&&r.type==='transfer'&&!r.other).length; if(bad) return alert(`Choose the other account for ${bad} transfer(s).`);
+  const rows=IMP.rows.filter(r=>r.include&&r.date).map(r=>{ const tr=r.type==='transfer', [from,to]=r.sign>0?[r.other,IMP.account]:[IMP.account,r.other];
+    return {date:r.date,type:r.type,amount:+r.amount.toFixed(2),category_id:tr?'':r.category_id,account_id:tr?from:IMP.account,to_account_id:tr?to:'',note:r.desc,entered_by:IMP.person||''}; });
   const res=await (await fetch('/api/bulk/entries',{method:'POST',body:JSON.stringify({rows})})).json();
   IMP={file:'',raw:[],head:[],map:{},rows:[],account:'',person:'',sign:'auto',datefmt:'auto',kind:''};
   await load(); alert(`Imported ${res.imported} transactions.`); go('tx');
