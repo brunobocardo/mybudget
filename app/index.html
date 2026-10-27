@@ -28,7 +28,7 @@ aside button { all:unset; cursor:pointer; padding:10px 12px; border-radius:10px;
 aside button:hover { background:rgba(255,255,255,.06); color:#fff; }
 aside button.on { background:rgba(46,196,132,.18); color:#fff; box-shadow:inset 3px 0 0 var(--brand2); }
 aside .sp { flex:1; } aside .me { font-size:12px; opacity:.7; padding:8px 12px; }
-main { padding:26px 32px 60px; max-width:1280px; width:100%; }
+main { padding:26px 32px 60px; width:100%; min-width:0; }
 .top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; flex-wrap:wrap; }
 .top h1 { margin:0; font-size:26px; letter-spacing:-.6px; } .top p { margin:2px 0 0; color:var(--muted); }
 .mp { display:flex; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:4px; box-shadow:var(--shadow); }
@@ -90,6 +90,7 @@ input:focus, select:focus { outline:2px solid var(--brand2); outline-offset:-1px
   .g4 { grid-template-columns:1fr 1fr; } .kpi .v { font-size:21px; } .cal .d { min-height:46px; font-size:10px; } .cal .d .b { display:none; } .cal .d.has::after { content:"•"; color:var(--red); }
   .hide-m { display:none; }
 }
+@media (min-width:1700px) { main { padding:32px 48px 60px; } .g3 { grid-template-columns:repeat(3,1fr); } .chart { height:320px; } .chart.sm { height:260px; } }
 </style>
 </head>
 <body>
