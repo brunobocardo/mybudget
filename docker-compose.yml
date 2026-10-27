@@ -1,0 +1,13 @@
+services:
+  mybudget:
+    build: .
+    image: mybudget:latest
+    container_name: mybudget
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"   # only this Mac can reach it
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data            # mybudget.db lives in the data folder next to this file
