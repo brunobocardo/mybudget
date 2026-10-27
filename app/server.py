@@ -25,6 +25,7 @@ GOOGLE_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
 ALLOWED = {e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()}
 AUTH_ON = bool(GOOGLE_ID and GOOGLE_SECRET)
 SESSION_DAYS = 30
+ICONS = {"/favicon.ico": "favicon.png", "/favicon.png": "favicon.png", "/apple-touch-icon.png": "apple-touch-icon.png", "/icon.png": "icon.png"}
 MODEL = "claude-sonnet-5-5"
 
 PROMPT = """You are a practical household budget coach. Below is a family's budget data as JSON:
@@ -121,7 +122,7 @@ def google_exchange(code):
     return claims
 
 LOGIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MyBudget – Sign in</title><style>
+<title>MyBudget – Sign in</title><link rel="icon" type="image/png" href="/favicon.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px Inter,-apple-system,system-ui,sans-serif;
 background:radial-gradient(circle at 50% 35%,#2ec48455,transparent 60%),linear-gradient(160deg,#17a37a,#0b2a27);color:#fff}
 .c{text-align:center;padding:40px 32px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:24px;backdrop-filter:blur(8px);max-width:360px;width:calc(100% - 32px)}
@@ -129,7 +130,7 @@ background:radial-gradient(circle at 50% 35%,#2ec48455,transparent 60%),linear-g
 h1{margin:0;font-size:28px}p{opacity:.8;font-style:italic;margin:6px 0 28px}
 a.g{display:flex;gap:10px;align-items:center;justify-content:center;background:#fff;color:#1f1f1f;text-decoration:none;font-weight:600;padding:12px 18px;border-radius:12px}
 .err{background:rgba(217,72,63,.25);border-radius:10px;padding:10px;margin-bottom:16px;font-size:13.5px}
-</style></head><body><div class="c"><div class="logo">🏠</div><h1>MyBudget</h1><p>You've got to have a plan...</p>{err}
+</style></head><body><div class="c"><img class="logo" src="/icon.png" alt=""><h1>MyBudget</h1><p>You've got to have a plan...</p>{err}
 <a class="g" href="/auth/login"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>Sign in with Google</a>
 </div></body></html>"""
 
@@ -188,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.redirect("/", ["mb_session=; Path=/; Max-Age=0"])
         if p == "/health":
             return self.send(200, {"ok": True})
+        if p in ICONS:  # served without sign-in so the browser tab and login page show the logo
+            return self.send(200, (HERE / ICONS[p]).read_bytes(), "image/png", [("Cache-Control", "max-age=86400")])
 
         u = self.user()
         if p in ("/", "/index.html"):
